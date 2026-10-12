@@ -2,9 +2,6 @@ library(tidyverse)
 library(sf)
 library(patchwork)
 library(lmerTest)
-library(gstat)
-library(spdep)
-library(spatialreg)
 
 library(foreach)
 library(doSNOW)
@@ -15,20 +12,23 @@ registerDoSNOW(cl)
 # Read map
 
 latlong_shp = read_sf("Data/Maps/BBS_LatLong_strata.shp")
+bcr_shp = read_sf("Data/Maps/bcr_strata.shp")
 
 # Read interaction potentials
+# Note: if doing sensitivity analysis, change here accordingly
 
 Interaction_Pairs = read_csv("Data/IP_IIP/adj_Pairs_IP_1-AVONET_0.95_TRUE.csv") %>% 
   separate_wider_delim(grid, delim = "_", names = c("lat", "long"), cols_remove = F) %>% 
   mutate(across(c(lat, long), ~as.numeric(.)))
 
 # Read intrinsic interaction potentials
+# Note: if doing sensitivity analysis, change here accordingly
 
 IIP = read_csv("Data/IP_IIP/Intrinsic_IP_1-AVONET_0.95_TRUE.csv")
 
 # Read bioclimatic variables by grid
 
-Bioclim = read_csv("Data/Bioclim.csv") %>% 
+Bioclim = read_csv("Data/WorldClim/Bioclim.csv") %>% 
   select(bio1, bio12, year, ST_12)
 
 # Read human-induced land use changes
@@ -71,6 +71,7 @@ trends_lm = Interaction_Pairs %>%
   filter(term == "year_since_1969")
 
 # Correct for the multiple comparisons (Benjamin-Hochberg)
+# Only filter for significant pairs for the main figures
 
 trends_signif = trends_lm %>% 
   ungroup() %>%
@@ -78,14 +79,21 @@ trends_signif = trends_lm %>%
   filter(p.adjusted < 0.05) %>% 
   mutate(Slope_IP_Sign = if_else(estimate > 0, "pos", "neg"))
 
-# Write data for future analysis
-# Recommended because the previous step takes a long time
+# Show all pairs for supp
 
-write_csv(trends_signif, "Data/Interaction_Pairs_corr_pval.csv")
+trends_all = trends_lm %>% 
+  ungroup() %>%
+  mutate(p.adjusted = p.adjust(p.value, method = "BH")) %>% 
+  mutate(Signif = if_else(p.adjusted < 0.05, "yes", "no")) %>% 
+  mutate(Slope_IP_Sign = if_else(estimate > 0, "pos", "neg"))
+
+# Write data for future analysis
+
+# write_csv(trends_signif, "Data/Interaction_Pairs_corr_pval_abs.csv")
 
 # Read from saved data
 
-trends_signif = read_csv("Data/Interaction_Pairs_corr_pval.csv")
+# trends_signif = read_csv("Data/Interaction_Pairs_corr_pval.csv")
 
 # Filter for significant trends only
 
@@ -135,10 +143,56 @@ pl_map_netcount = ggplot() +
         strip.text = element_blank(),
         legend.position = "bottom")
 
-# Save figure; this is Figure 1A
-# There is code below to save the entire Figure 1
+pl_map_netcount
+
+# Save figure
 
 ggsave("Figures/Maps_Net_Count.png", pl_map_netcount, width = 2000, height = 1500, unit = "px")
+ggsave("Figures/Maps_Net_Count.pdf", pl_map_netcount, width = 2000, height = 1500, unit = "px")
+
+# Tally all trends, significant and nonsignificant (supp)
+
+tally_all = trends_all %>% 
+  group_by(grid, Recorded) %>% 
+  summarize(Num_Pos = sum(Slope_IP_Sign == "pos"), Num_Neg = sum(Slope_IP_Sign == "neg"), .groups = "drop") %>% 
+  pivot_longer(3:4, names_to = "Sign", values_to = "Count") %>% 
+  full_join(latlong_shp, by = c("grid" = "ST_12"))
+
+# Tally net number of increasing trends in each grid for all recorded and predicted interactions
+
+tally_all_simp = tally_all %>% 
+  mutate(Count = if_else(Sign == "Num_Neg", -Count, Count)) %>% 
+  group_by(grid) %>% 
+  mutate(Net_Count = sum(Count)) %>% 
+  select(-Recorded, -Sign, -Count) %>% 
+  distinct()
+
+pl_map_netcount_all = ggplot() + 
+  geom_sf(data = latlong_shp, aes(geometry = geometry),
+          color = "gray", size = 0.1,
+          inherit.aes = F) +
+  geom_sf(data = tally_all_simp, 
+          aes(fill = Net_Count, geometry = geometry), 
+          color = "gray", size = 0.1, 
+          inherit.aes = F) + 
+  coord_sf() + 
+  scale_fill_gradient2(name = "Net count of increasing interactions per grid", 
+                       low = "blue", mid = "white", high = "red") + 
+  theme_bw() + 
+  theme(panel.grid = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.text = element_blank(), 
+        legend.title = element_text(size = 12), 
+        legend.text = element_text(size = 10), 
+        strip.background = element_blank(), 
+        strip.text = element_blank(),
+        legend.position = "bottom")
+
+pl_map_netcount_all
+
+# Save figure
+
+ggsave("Figures/Maps_Net_Count_SigNonSig.png", pl_map_netcount_all, width = 2000, height = 1500, unit = "px")
 
 # Detailed visualization (supp)
 
@@ -198,7 +252,7 @@ pl_map_0 = ggplot() +
         strip.text = element_blank(),
         legend.position = "bottom")
 
-# Save Figure S1
+# Save figure
 
 pl_map_both = pl_map_1 + pl_map_0
 pl_map_both
@@ -211,7 +265,7 @@ ggsave("Figures/Maps_Both_Signif.png", pl_map_both, width = 4000, height = 3000,
 
 # Filter for interactions with significant temporal trends only
 
-all_trends = Interaction_Pairs %>% 
+signif_trends = Interaction_Pairs %>% 
   select(-(Relative_Abundance_Predator:year), -year_since_1969) %>% 
   distinct() %>% 
   unite(ID, c(Predator, Prey, grid), sep = "/", remove = F) %>%
@@ -227,10 +281,10 @@ all_trends = Interaction_Pairs %>%
 
 # Simplfied visualization: both recorded and predicted
 
-xrange = range(c(all_trends$mean_beta_logA1 - all_trends$sd_beta_logA1, 
-                 all_trends$mean_beta_logA1 + all_trends$sd_beta_logA1)) * 1.05
-yrange = range(c(all_trends$mean_beta_logA2 - all_trends$sd_beta_logA2, 
-                 all_trends$mean_beta_logA2 + all_trends$sd_beta_logA2)) * 1.05
+xrange = range(c(signif_trends$mean_beta_logA1 - signif_trends$sd_beta_logA1, 
+                 signif_trends$mean_beta_logA1 + signif_trends$sd_beta_logA1)) * 1.05
+yrange = range(c(signif_trends$mean_beta_logA2 - signif_trends$sd_beta_logA2, 
+                 signif_trends$mean_beta_logA2 + signif_trends$sd_beta_logA2)) * 1.05
 cont = expand_grid(x = seq(xrange[1], xrange[2], by = (xrange[2]-xrange[1])/150), 
                    y = seq(yrange[1], yrange[2], by = (yrange[2]-yrange[1])/150)) %>% 
   mutate(z = x + y)
@@ -240,11 +294,13 @@ zrange = range(cont$z)
 
 p_all = ggplot() + 
   geom_tile(data = cont, aes(x = x, y = y, fill = z)) +
-  geom_pointrange(data = all_trends, 
+  # geom_contour(data = cont, aes(x = x, y = y, z = z), color = "gray50",
+  #              breaks = setdiff(seq(zrange[1], zrange[2], length = 10), 0)) +
+  geom_pointrange(data = signif_trends, 
                   aes(x = mean_beta_logA1, xmin = mean_beta_logA1 - sd_beta_logA1, xmax = mean_beta_logA1 + sd_beta_logA1, 
                       y = mean_beta_logA2, shape = as.factor(Recorded)), 
                   alpha = 0.15, size = 0.75) + 
-  geom_pointrange(data = all_trends, 
+  geom_pointrange(data = signif_trends, 
                   aes(y = mean_beta_logA2, ymin = mean_beta_logA2 - sd_beta_logA2, ymax = mean_beta_logA2 + sd_beta_logA2, 
                       x = mean_beta_logA1, shape = as.factor(Recorded)), 
                   alpha = 0.15, size = 0.75) +
@@ -265,14 +321,14 @@ build_p_all = ggplot_build(p_all)
 xrange_p_all = build_p_all$layout$panel_scales_x[[1]]$range$range
 yrange_p_all = build_p_all$layout$panel_scales_y[[1]]$range$range
 
-p_A1 = all_trends %>% 
+p_A1 = signif_trends %>% 
   ggplot(aes(x = mean_beta_logA1)) +
   geom_density(fill = "gray75") + 
   geom_vline(xintercept = 0) +
   xlim(xrange_p_all) + 
   theme_void()
 
-p_A2 = all_trends %>% 
+p_A2 = signif_trends %>% 
   ggplot(aes(x = mean_beta_logA2)) +
   geom_density(fill = "gray75") + 
   geom_vline(xintercept = 0) +
@@ -286,15 +342,15 @@ pl_pairs = wrap_plots(p_A1, plot_spacer(), p_all, p_A2,
 
 pl_pairs
 
-# Save Figure 1B
-# There is code below to save the entire Figure 1
+# Save figures
 
 ggsave("Figures/AllPairwise_All.png", pl_pairs, width = 2000, height = 2000, unit = "px")
+ggsave("Figures/AllPairwise_All.pdf", pl_pairs, width = 2000, height = 2000, unit = "px")
 
 # Specify recorded or unrecorded
 
-trends_data_1 = all_trends %>% filter(Recorded == 1)
-trends_data_0 = all_trends %>% filter(Recorded == 0)
+trends_data_1 = signif_trends %>% filter(Recorded == 1)
+trends_data_0 = signif_trends %>% filter(Recorded == 0)
 
 # Set up the contour plots for recorded and predicted interactions
 
@@ -320,17 +376,21 @@ zrange_0 = range(cont_0$z)
 
 p_all_1 = ggplot() + 
   geom_tile(data = cont_1, aes(x = x, y = y, fill = z)) +
+  # geom_contour(data = cont, aes(x = x, y = y, z = z), color = "gray50",
+  #              breaks = setdiff(seq(zrange[1], zrange[2], length = 10), 0)) +
   geom_pointrange(data = trends_data_1, 
                   aes(x = mean_beta_logA1, xmin = mean_beta_logA1 - sd_beta_logA1, xmax = mean_beta_logA1 + sd_beta_logA1, 
                       y = mean_beta_logA2), 
-                  alpha = 0.15, size = 0.75) + 
+                  alpha = 0.15, size = 0.75, shape = 17) + 
   geom_pointrange(data = trends_data_1, 
                   aes(y = mean_beta_logA2, ymin = mean_beta_logA2 - sd_beta_logA2, ymax = mean_beta_logA2 + sd_beta_logA2, 
                       x = mean_beta_logA1), 
-                  alpha = 0.15, size = 0.75) +
+                  alpha = 0.15, size = 0.75, shape = 17) +
+  # ggrepel::geom_text_repel(data = single_pair, aes(x = beta_logA1, y = beta_logA2, label = lat)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray25") + 
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray25") +
   geom_abline(slope = -1, intercept = 0, color = "gray25") +
+  # coord_cartesian() +
   xlab("Trend of log relative abundance of predator") + 
   ylab("Trend of log relative abundance of prey") + 
   scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, 
@@ -371,17 +431,21 @@ pl_pairs_1
 
 p_all_0 = ggplot() + 
   geom_tile(data = cont_0, aes(x = x, y = y, fill = z)) +
+  # geom_contour(data = cont, aes(x = x, y = y, z = z), color = "gray50",
+  #              breaks = setdiff(seq(zrange[1], zrange[2], length = 10), 0)) +
   geom_pointrange(data = trends_data_0, 
                   aes(x = mean_beta_logA1, xmin = mean_beta_logA1 - sd_beta_logA1, xmax = mean_beta_logA1 + sd_beta_logA1, 
                       y = mean_beta_logA2), 
-                  alpha = 0.15, size = 0.75) + 
+                  alpha = 0.15, size = 0.75, shape = 16) + 
   geom_pointrange(data = trends_data_0, 
                   aes(y = mean_beta_logA2, ymin = mean_beta_logA2 - sd_beta_logA2, ymax = mean_beta_logA2 + sd_beta_logA2, 
                       x = mean_beta_logA1), 
-                  alpha = 0.15, size = 0.75) +
+                  alpha = 0.15, size = 0.75, shape = 16) +
+  # ggrepel::geom_text_repel(data = single_pair, aes(x = beta_logA1, y = beta_logA2, label = lat)) +
   geom_vline(xintercept = 0, linetype = "dashed", color = "gray25") + 
   geom_hline(yintercept = 0, linetype = "dashed", color = "gray25") +
   geom_abline(slope = -1, intercept = 0, color = "gray25") +
+  # coord_cartesian() +
   xlab("Trend of log relative abundance of predator") + 
   ylab("Trend of log relative abundance of prey") + 
   scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, 
@@ -418,16 +482,98 @@ pl_pairs_0 = wrap_plots(p_A1_0, plot_spacer(), p_all_0, p_A2_0,
 
 pl_pairs_0
 
-# Save Figure S3
+# Save single figures
 
 ggsave("Figures/AllPairwise_Recorded.png", pl_pairs_1, width = 2000, height = 2000, unit = "px")
 ggsave("Figures/AllPairwise_Predicted.png", pl_pairs_0, width = 2000, height = 2000, unit = "px")
+
+# Show nonsignificant trends only
+
+nonsig_trends = Interaction_Pairs %>% 
+  select(-(Relative_Abundance_Predator:year), -year_since_1969) %>% 
+  distinct() %>% 
+  unite(ID, c(Predator, Prey, grid), sep = "/", remove = F) %>%
+  filter(!ID %in% trends_signif_list$ID) %>%
+  select(-ID) %>%
+  group_by(Predator, Prey) %>% 
+  summarize(mean_beta_logA1 = mean(beta_logA1), sd_beta_logA1 = sd(beta_logA1), 
+            mean_beta_logA2 = mean(beta_logA2), sd_beta_logA2 = sd(beta_logA2), 
+            mean_beta_logIP = mean(beta_logIP), sd_beta_logIP = sd(beta_logIP)) %>% 
+  left_join(IIP %>% select(Predator, Prey, IIP), by = c("Predator", "Prey")) %>% 
+  mutate(Recorded = if_else(IIP == 1, 1, 0)) %>% 
+  filter(!is.na(sd_beta_logA1) & !is.na(sd_beta_logA2) & !is.na(sd_beta_logIP))
+
+# Simplfied visualization: both recorded and predicted
+
+xrange = range(c(nonsig_trends$mean_beta_logA1 - nonsig_trends$sd_beta_logA1, 
+                 nonsig_trends$mean_beta_logA1 + nonsig_trends$sd_beta_logA1)) * 1.05
+yrange = range(c(nonsig_trends$mean_beta_logA2 - nonsig_trends$sd_beta_logA2, 
+                 nonsig_trends$mean_beta_logA2 + nonsig_trends$sd_beta_logA2)) * 1.05
+cont = expand_grid(x = seq(xrange[1], xrange[2], by = (xrange[2]-xrange[1])/150), 
+                   y = seq(yrange[1], yrange[2], by = (yrange[2]-yrange[1])/150)) %>% 
+  mutate(z = x + y)
+zrange = range(cont$z)
+
+# Assemble plot for all interactions
+
+p_all_nonsig = ggplot() + 
+  geom_tile(data = cont, aes(x = x, y = y, fill = z)) +
+  geom_pointrange(data = nonsig_trends, 
+                  aes(x = mean_beta_logA1, xmin = mean_beta_logA1 - sd_beta_logA1, xmax = mean_beta_logA1 + sd_beta_logA1, 
+                      y = mean_beta_logA2, shape = as.factor(Recorded)), 
+                  alpha = 0.15, size = 0.75) + 
+  geom_pointrange(data = nonsig_trends, 
+                  aes(y = mean_beta_logA2, ymin = mean_beta_logA2 - sd_beta_logA2, ymax = mean_beta_logA2 + sd_beta_logA2, 
+                      x = mean_beta_logA1, shape = as.factor(Recorded)), 
+                  alpha = 0.15, size = 0.75) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray25") + 
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray25") +
+  geom_abline(slope = -1, intercept = 0, color = "gray25") +
+  xlab("Trend of log relative abundance of predator") + 
+  ylab("Trend of log relative abundance of prey") + 
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, 
+                       name = "Trend of log(IP)") +
+  scale_alpha_manual(values = c(1, 1)) +
+  theme_bw() + 
+  theme(axis.text = element_text(size = 10), 
+        axis.title = element_text(size = 12), 
+        legend.position = "none")
+
+build_p_all_nonsig = ggplot_build(p_all_nonsig)
+xrange_p_all_nonsig = build_p_all_nonsig$layout$panel_scales_x[[1]]$range$range
+yrange_p_all_nonsig = build_p_all_nonsig$layout$panel_scales_y[[1]]$range$range
+
+p_A1 = all_trends %>% 
+  ggplot(aes(x = mean_beta_logA1)) +
+  geom_density(fill = "gray75") + 
+  geom_vline(xintercept = 0) +
+  xlim(xrange_p_all_signonsig) + 
+  theme_void()
+
+p_A2 = all_trends %>% 
+  ggplot(aes(x = mean_beta_logA2)) +
+  geom_density(fill = "gray75") + 
+  geom_vline(xintercept = 0) +
+  coord_flip() + 
+  xlim(yrange_p_all_signonsig) +
+  theme_void()
+
+pl_pairs = wrap_plots(p_A1, plot_spacer(), p_all_nonsig, p_A2, 
+                      nrow = 2, widths = c(10, 1), heights = c(1, 10), 
+                      guides = "collect")
+
+pl_pairs
+
+# Save figures
+
+ggsave("Figures/AllPairwise_All_Nosig.png", pl_pairs, width = 2000, height = 2000, unit = "px")
 
 
 ########## Decomposition by Species ##########
 
 
 pl_pairs_bypred = list()
+data_bypred = tibble()
 all_pred = unique(Interaction_Pairs$Predator)
 
 for (i in 1:length(all_pred)) {
@@ -444,11 +590,17 @@ for (i in 1:length(all_pred)) {
     group_by(Predator, Prey) %>% 
     summarize(mean_beta_logA1 = mean(beta_logA1), sd_beta_logA1 = sd(beta_logA1), 
               mean_beta_logA2 = mean(beta_logA2), sd_beta_logA2 = sd(beta_logA2), 
-              mean_beta_logIP = mean(beta_logIP), sd_beta_logIP = sd(beta_logIP)) %>% 
+              mean_beta_logIP = mean(beta_logIP), sd_beta_logIP = sd(beta_logIP), 
+              .groups = "drop") %>% 
     left_join(IIP %>% select(Predator, Prey, IIP), by = c("Predator", "Prey")) %>% 
-    mutate(Recorded = if_else(IIP == 1, 1, 0)) %>% 
+    mutate(Recorded = if_else(IIP == 1, 1, 0), 
+           Sign = if_else(mean_beta_logIP < 0, "neg", "pos")) %>% 
     filter(!is.na(sd_beta_logA1) & !is.na(sd_beta_logA2) & !is.na(sd_beta_logIP))
-
+  
+  # Bind data for summary stats
+  
+  data_bypred = rbind(data_bypred, all_trends_s)
+  
   # Simplfied visualization: both recorded and predicted
   
   xrange = range(c(min(all_trends_s$mean_beta_logA1 - all_trends_s$sd_beta_logA1, 0), 
@@ -518,11 +670,27 @@ names(pl_pairs_bypred) = all_pred
 
 pl_pairs_bypred
 
-# Save multi-panel figure; this is Figure 2
+# Calculate summary stats
+
+summary_stats = data_bypred %>% 
+  group_by(Predator) %>% 
+  mutate(all_mean_beta_logIP = mean(mean_beta_logIP), 
+         sd_all_mean_beta_logIP = sd(mean_beta_logIP)) %>% 
+  group_by(Predator, Sign) %>% 
+  mutate(count = n()) %>% 
+  select(Predator, all_mean_beta_logIP, sd_all_mean_beta_logIP, Sign, count) %>% 
+  distinct() %>% 
+  pivot_wider(names_from = Sign, values_from = count, values_fill = 0)
+
+# Write summary stats
+
+write_csv(summary_stats, "Data/Stats/Panel_Summary_Pred.csv")
+
+# Save multi-panel figure
 
 pl_pairs_combined = wrap_plots(pl_pairs_bypred, axis_titles = "collect")
 
-ggsave("Figures/Pairwise_byPred_SignifOnly.png", pl_pairs_combined, width = 5000, height = 5000, unit = "px")
+ggsave("Figures/Pairwise_byPred_SignifOnly.pdf", pl_pairs_combined, width = 5000, height = 5000, unit = "px")
 
 
 ########## Analyze Turnover with Land Use Change ##########
@@ -541,6 +709,15 @@ env_change = Anthromes %>%
             diff_Cultured = Cultured[year == 2021] - Cultured[year == 1970], 
             diff_Wild = Wild[year == 2021] - Wild[year == 1970], 
             diff_nonWild = diff_Settlements + diff_Agriculture + diff_Cultured)
+
+# Labels for environmental changes
+
+env_labels = c("diff_Agriculture" = "Agriculture", 
+               "diff_Cultured" = "Cultured", 
+               "diff_Settlements" = "Settlements", 
+               "diff_Wild" = "Wild", 
+               "diff_temp" = "Temperature", 
+               "diff_prec" = "Precipitation")
 
 # Get interaction networks in the form of adjacency matrices for each grid,
 # then calculate dissimilarity between the beginning and the end with Frobenius norm
@@ -598,24 +775,16 @@ all_dissims = foreach(g = all_grids, .combine = rbind, .packages = "tidyverse",
     column_to_rownames("Predator") %>% 
     as.matrix()
 
-  output = tibble(dissim_rec = norm(single_grid_rec_yp1 - single_grid_rec_y, type = "F"), 
-                  dissim_pre = norm(single_grid_pre_yp1 - single_grid_pre_y, type = "F"), 
-                  dissim_all = norm(single_grid_all_yp1 - single_grid_all_y, type = "F"),
-                  grid = g)
+  # Calculate dissimilarity in Frobenius norm
   
-  output
+  output = tibble(dissim_rec = norm((single_grid_rec_yp1 - single_grid_rec_y) / (single_grid_rec_y + 1e-10), type = "F"), 
+                  dissim_pre = norm((single_grid_pre_yp1 - single_grid_pre_y) / (single_grid_pre_y + 1e-10), type = "F"), 
+                  dissim_all = norm((single_grid_all_yp1 - single_grid_all_y) / (single_grid_all_y + 1e-10), type = "F"),
+                  grid = g)
   
 }
 
-# Save intermediate dissimilarity results; this is recommended because the calculation is slow
-
-saveRDS(all_dissims, "Code_Submission/All_Dissims.rds")
-
-# Read saved intermediate results
-
-all_dissims = readRDS("Code_Submission/All_Dissims.rds")
-
-# Attach environmental change data
+# Removed grids where interaction networks are in different dimensions between 1970 and 2021
 
 all_data_dissim = all_dissims %>% 
   left_join(env_change, by = c("grid" = "ST_12"))
@@ -629,22 +798,16 @@ all_data_dissim_t = all_data_dissim %>%
   mutate(across(c(dissim_all, dissim_rec), ~log(.))) %>% 
   mutate(across(starts_with("diff"), ~c(scale(.))))
 
-# Visualization
-# Change here if want to look at all interaction pairs (dissim_all) or just recorded pairs (dissim_rec)
+# Visualization, all interactions
 
 p_envchange = all_data_dissim_t %>% 
   pivot_longer(starts_with("diff"), names_to = "land_use_type", values_to = "diff") %>% 
-  filter(!land_use_type %in% c("diff_nonWild", "diff_temp", "diff_prec")) %>% 
+  filter(!land_use_type %in% c("diff_nonWild")) %>% 
   ggplot(aes(x = diff, y = dissim_rec)) + 
   geom_point() +
   geom_smooth(method = "lm") + 
   ggh4x::facet_wrap2(. ~ land_use_type, scale = "free", 
-                     labeller = as_labeller(c("diff_Agriculture" = "Agriculture", 
-                                              "diff_Cultured" = "Cultured", 
-                                              "diff_Settlements" = "Settlements", 
-                                              "diff_Wild" = "Wild", 
-                                              "diff_temp" = "Temperature", 
-                                              "diff_prec" = "Precipitation"))) + 
+                     labeller = as_labeller(env_labels)) + 
   xlab("Scaled difference in environmental factors") + 
   ylab("Turnover of interactions") + 
   theme_bw() + 
@@ -655,22 +818,29 @@ p_envchange = all_data_dissim_t %>%
 
 p_envchange
 
-# Save Figure S5
+# Mapping land use changes
 
-ggsave("Figures/Land_Use_Change.png", p_envchange, width = 3000, height = 3000, unit = "px")
+p_map_envchanges = all_data_dissim_t %>% 
+  right_join(latlong_shp, by = c("grid" = "ST_12")) %>% 
+  select(-diff_prec, -diff_temp, -diff_nonWild) %>% 
+  pivot_longer(starts_with("diff"), names_to = "Type", values_to = "diff") %>% 
+  ggplot() + 
+  geom_sf(aes(geometry = geometry, fill = diff)) + 
+  facet_wrap(.~Type, labeller = as_labeller(env_labels)) +
+  scale_fill_gradient2(low = "red", mid = "white", high = "blue", midpoint = 0, 
+                       name = "Scaled changes\n(log-transformed)") + 
+  theme_bw() + 
+  theme(axis.text = element_blank(), 
+        axis.title = element_blank(), 
+        strip.text = element_text(size = 12))
 
-# Run linear models with all environmental factors
-# Change here if want to look at all interaction pairs (dissim_all) or just recorded pairs (dissim_rec)
+p_map_envchanges
 
-m_all_env = lm(dissim_all ~ diff_temp + diff_prec + diff_Settlements + diff_Wild + diff_Cultured + 
-                 diff_temp:diff_prec, 
-               data = all_data_dissim_t)
-
-summary(m_all_env)
-car::ncvTest(m_all_env)
-confint(m_all_env)
+ggsave("Figures/Map_Env_Changes.png", p_map_envchanges, width = 4000, height = 3000, unit = "px")
 
 # Check for spatial autocorrelation in residuals
+
+library(gstat)
 
 m_env_resid = tibble(Region = all_data_dissim_t$grid, resid = residuals(m_all_env)) %>% 
   separate_wider_delim(Region, names = c("lat", "long"), delim = "_") %>% 
@@ -693,10 +863,24 @@ p_vario = env_vario %>%
 
 p_vario
 
-# Turns out the residuals are strongly spatially correlated
-# Save Figure S6
-
 ggsave("Figures/Variogram.png", p_vario, width = 3000, height = 1500, unit = "px")
+
+# Fit a variogram model for the residuals
+
+vgm_model = fit.variogram(env_vario, model = vgm("Sph"))
+plot(env_vario, vgm_model)
+
+# Add spatial information
+
+all_data_dissim_sp = all_data_dissim_t %>% 
+  separate_wider_delim(grid, names = c("lat", "long"), delim = "_") %>% 
+  mutate(lat = as.numeric(lat), long = as.numeric(long))
+# st_as_sf(coords = c("long", "lat"), crs = 4326)
+
+# Run linear model with spatial autocorrelation, spdep
+
+library(spdep)
+library(spatialreg)
 
 # Get neighbors
 
@@ -705,9 +889,33 @@ nb = knearneigh(coords, k = 24)
 nb = knn2nb(nb)
 listw = nb2listw(nb, style = "W")
 
-# Fit models with spatial lag (values are affected by neighboring values)
+# Fit linear models for individual land use changes to determine the flattest slope (reference)
+# Turns out in this case wildland is the reference
 
-m_env_spatial = lagsarlm(dissim_rec ~ diff_temp + diff_prec + diff_Settlements + diff_Cultured + diff_Wild + 
+m_settlements_spatial = lagsarlm(dissim_all ~ diff_Settlements,
+                           data = all_data_dissim_sp, listw = listw)
+
+summary(m_settlements_spatial)
+
+m_agriculture_spatial = lagsarlm(dissim_all ~ diff_Agriculture,
+                                   data = all_data_dissim_sp, listw = listw)
+
+summary(m_agriculture_spatial)
+
+m_cultured_spatial = lagsarlm(dissim_all ~ diff_Cultured,
+                                   data = all_data_dissim_sp, listw = listw)
+
+summary(m_cultured_spatial)
+
+m_wild_spatial = lagsarlm(dissim_all ~ diff_Wild,
+                                   data = all_data_dissim_sp, listw = listw)
+
+summary(m_wild_spatial)
+
+# Fit models with spatial lag (values are affected by neighboring values)
+# Change here for 
+
+m_env_spatial = lagsarlm(dissim_all ~ diff_temp + diff_prec + diff_Settlements + diff_Cultured + diff_Agriculture + 
                            diff_temp:diff_prec, 
                          data = all_data_dissim_sp, listw = listw)
 
@@ -718,19 +926,22 @@ confint(m_env_spatial)
 
 cor(m_env_spatial$y, fitted(m_env_spatial))^2
 
-# Visualize model fitting results; not in the manuscript
+# Visualize model fitting results
+# Change here for spatial vs. nonspatial model
 
 m_all_env_params = broom::tidy(m_env_spatial)
 
 m_all_env_confint = confint(m_env_spatial) %>% 
   as.data.frame() %>% 
-  rownames_to_column("term")
+  rownames_to_column("term") %>% 
+  left_join(m_all_env_params, by = "term")
 
 labels = c("diff_temp" = "Change in temp", 
            "diff_prec" = "Change in prec", 
            "diff_temp:diff_prec" = "Change in temp:Change in prec", 
            "diff_Cultured" = "Change in cultured", 
            "diff_Settlements" = "Change in settlements", 
+           "diff_Agriculture" = "Chanmge in agriculture",
            "diff_Wild" = "Change in wild")
 
 p_env_params = m_all_env_confint %>% 
@@ -751,10 +962,43 @@ p_env_params = m_all_env_confint %>%
         axis.title = element_text(size = 12), 
         legend.position = "none")
 
-# Save environmental association with turnover; this is currently not in the manuscript
+p_env_params
 
-ggsave("Figures/Env_Turnover.png", p_env_params, width = 3000, height = 1500, unit = "px")
+# Save figures
 
-# Save stats of the linear model
+ggsave("Figures/Env_Turnover_Abs.png", p_env_params, width = 3000, height = 1500, unit = "px")
+ggsave("Figures/Env_Turnover.pdf", p_env_params, width = 2000, height = 2000, unit = "px")
 
-write_csv(m_all_env_params, "Data/Stats/turnover_envchange_lm.csv")
+# Save stats
+
+write_csv(m_all_env_params, "Data/Stats/turnover_envchange_abs.csv")
+
+# Run linear models with individual land use changes
+
+m_Settlements = lm(dissim_all ~ diff_temp + diff_prec + diff_Settlements + diff_temp:diff_prec, 
+               data = all_data_dissim_t)
+
+summary(m_Settlements)
+car::ncvTest(m_Settlements)
+
+m_Cultured = lm(dissim_all ~ diff_temp + diff_prec + diff_Cultured + diff_temp:diff_prec, 
+                   data = all_data_dissim_t)
+
+summary(m_Cultured)
+car::ncvTest(m_Cultured)
+
+m_Agriculture = lm(dissim_all ~ diff_temp + diff_prec + diff_Agriculture + diff_temp:diff_prec, 
+                   data = all_data_dissim_t)
+
+summary(m_Agriculture)
+car::ncvTest(m_Agriculture)
+
+m_Wild = lm(dissim_all ~ diff_temp + diff_prec + diff_Wild + diff_temp:diff_prec, 
+                   data = all_data_dissim_t)
+
+summary(m_Wild)
+car::ncvTest(m_Wild)
+
+# Save figure
+
+ggsave("Figures/Land_Use_Change.png", p_envchange, width = 3000, height = 3000, unit = "px")

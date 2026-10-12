@@ -8,7 +8,7 @@ registerDoSNOW(cl)
 
 # Read data
 
-similarities = read_csv("Data/Similarities/Similarities_1-AVONET_0.95_TRUE.csv")
+similarities = read_csv("Data/Similarities/Similarities_1-AVONET_0.5_TRUE.csv")
 
 # Calculate intrinsic interaction potential as the following:
 # For each predator, pool all the preys, and for each prey with high similarities but
@@ -69,4 +69,4 @@ all_potentials = rbind(all_doc_potentials, all_undoc_potentials) %>%
 
 # Write data
 
-write_csv(all_potentials, "Data/IP_IIP/Intrinsic_IP_1-AVONET_0.95_TRUE.csv")
+write_csv(all_potentials, "Data/IP_IIP/Intrinsic_IP_1-AVONET_0.5_TRUE.csv")

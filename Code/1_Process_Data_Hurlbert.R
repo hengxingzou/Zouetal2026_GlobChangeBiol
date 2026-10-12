@@ -19,9 +19,9 @@ dietdb_filtered = dietdb %>%
   # filter for species-level observations only
   filter(Prey_Scientific_Name != "" & !grepl("/", Scientific_Name))
 
-# Load BBS species list; see Methods on the derivation of this list
+# Load BBS species list
 
-All_Spp_List = read_csv("Data/BBS_List_Num_Records.csv")
+All_Spp_List = read_csv("Data/SpeciesList/BBS_List_Num_Records.csv")
 
 # Load functional traits
 
@@ -33,7 +33,7 @@ All_Funct_Data = read_csv("Data/All_Funct_Data.csv")
 
 # Read the McTavish et al. taxonomy
 
-McTavish = read_csv("OTT_crosswalk_2023.csv")
+McTavish = read_csv("Data/McTavish2024/OTT_crosswalk_2023.csv")
 
 # Check predator names
 

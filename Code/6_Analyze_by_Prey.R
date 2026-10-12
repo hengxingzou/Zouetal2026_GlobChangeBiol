@@ -13,8 +13,7 @@ registerDoSNOW(cl)
 
 Interaction_Pairs = read_csv("Data/IP_IIP/adj_Pairs_IP_1-AVONET_0.95_TRUE.csv") %>% 
   separate_wider_delim(grid, delim = "_", names = c("lat", "long"), cols_remove = F) %>% 
-  mutate(across(c(lat, long), ~as.numeric(.))) %>% 
-  filter(Recorded == 1)
+  mutate(across(c(lat, long), ~as.numeric(.)))
 
 # Read intrinsic interaction potentials
 
@@ -52,6 +51,10 @@ species_groups_all = species_groups_fixed %>%
   mutate(Migrate = "R") %>% 
   bind_rows(species_groups_fixed)
 
+# Write data for future use
+
+# write_csv(species_groups_all, "Data/Species_Groups_Fixed.csv")
+
 
 ########## Tally Interactions by Pair ##########
 
@@ -64,6 +67,8 @@ IP_prey = Interaction_Pairs %>%
   group_by(Prey, year_since_1969, grid) %>% 
   mutate(sum_pred = sum(IIP * Relative_Abundance_Predator)) %>% 
   group_by(Prey, grid) %>% 
+  # mutate(beta_sumlogpred = cov(log(sum_pred), year_since_1969) / var(year_since_1969)) %>% # not working
+  # mutate(beta_logsumIP = cov(log(sum_IP), year_since_1969) / var(year_since_1969)) %>% 
   left_join(species_groups_all, by = c("Prey" = "sci_name"))
 
 
@@ -160,12 +165,12 @@ all_diag_biomes = do.call(rbind, lapply(m_biomes, `[[`, 2))
 p_trend_biomes = all_param_biomes %>% 
   mutate(signif = if_else(p.adjusted >= 0.05, "no", "yes")) %>% 
   filter(parameters == "year_since_1969") %>% 
-  ggplot(aes(x = group, y = Estimate, alpha = signif)) + 
+  ggplot(aes(x = group, y = Estimate)) + 
   geom_pointrange(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`)) + 
   geom_hline(yintercept = 0) + 
   xlab("Breeding biome") + 
   ylab("Temporal trend in predation risk") +
-  scale_alpha_manual(values = c(0.15, 1)) +
+  # scale_alpha_manual(values = c(0.15, 1)) +
   theme_bw() + 
   theme(axis.text.x = element_text(size = 10, angle = 60, vjust = 0.5), 
         axis.text.y = element_text(size = 10), 
@@ -174,14 +179,38 @@ p_trend_biomes = all_param_biomes %>%
 
 p_trend_biomes
 
-# Save Figure 3
+# By native status
 
-ggsave("Figures/Prey_Predation_Risks.png", (p_trend_group | p_trend_biomes), 
+native_status = unique(species_groups_all$native)
+
+m_status = foreach(b = native_status, .combine = rbind, .packages = "tidyverse") %dopar% {
+  
+  m_b = lmerTest::lmer(formula = log(sum_IP) ~ year_since_1969 + (1 | grid) + (1 | Prey), 
+                       data = IP_prey %>% 
+                         select(Prey, grid, sum_IP, year_since_1969, native) %>% 
+                         filter(native == b) %>% 
+                         distinct())
+  
+  as.data.frame(summary(m_b)$coeff) %>% 
+    rownames_to_column("parameters") %>% 
+    mutate(group = b)
+  
+}
+
+m_status %>% 
+  filter(parameters == "year_since_1969") %>% 
+  ggplot(aes(x = group, y = Estimate)) + 
+  geom_pointrange(aes(ymin = Estimate - `Std. Error`, ymax = Estimate + `Std. Error`)) + 
+  geom_hline(yintercept = 0)
+
+# Save figures
+
+ggsave("Figures/Prey_Predation_Risks_Abs.pdf", (p_trend_group | p_trend_biomes), 
        width = 3000, height = 1500, unit = "px")
 
-# Save stats; files starting with Params_ are Table S2
+# Save stats
 
-write_csv(all_param_groups, "Data/Stats/Params_lmer_groups.csv")
-write_csv(all_diag_groups, "Data/Stats/Diag_lmer_groups.csv")
-write_csv(all_param_biomes, "Data/Stats/Params_lmer_biomes.csv")
-write_csv(all_diag_biomes, "Data/Stats/Diag_lmer_biomes.csv")
+write_csv(all_param_groups, "Data/Stats/Params_lmer_groups_Abs.csv")
+write_csv(all_diag_groups, "Data/Stats/Diag_lmer_groups_Abs.csv")
+write_csv(all_param_biomes, "Data/Stats/Params_lmer_biomes_Abs.csv")
+write_csv(all_diag_biomes, "Data/Stats/Diag_lmer_biomes_Abs.csv")

@@ -1,15 +1,12 @@
 library(tidyverse)
 library(lsa)
+# library(igraph)
 
 source("Code/calculate_similarity.R")
 
-
-########## Preparation and Empirical Mass Ratios ##########
-
-
 # Read BBS species list with credible relative abundance estimates (470 species)
 
-all_spp_list = read_csv("Filtered_Spp_List.csv") %>% 
+all_spp_list = read_csv("Data/Filtered_Spp_List.csv") %>% 
   select(-aou) %>% 
   distinct()
 
@@ -26,17 +23,24 @@ filtered_interactions = all_interactions %>%
 
 # Load functional traits
 
-All_Funct_Data = read_csv("Data/All_Funct_Data.csv")
+All_Funct_Data = read_csv("/Data/All_Funct_Data.csv")
 
-# Specify set of traits to use; Set 1-AVONET is used for our analyses
+# Specify set of traits to use
+
 # Set 1-AVONET: AVONET base traits + migration, pelagic, nocturnal, parasite, nest
-# See below for more information on other sets
+# Set 2-AVONET: AVONET base traits + pelagic, nocturnal, parasite
+# Set 3-AVONET: AVONET base traits
+# Set 1-IUCN: IUCN base traits + migration, pelagic, nocturnal, parasite, nest
+# Set 2-IUCN: IUCN base traits + pelagic, nocturnal, parasite
+# Set 3-IUCN: IUCN base traits
+
+# See below for more info on base traits
 
 trait_set = "1-AVONET"
 
 # Specify threshold for selecting similar species
 
-threshold = 0.95
+threshold = 0.5
 
 # Specify strict trait matching
 
@@ -77,9 +81,7 @@ p_emp_ratios = empirical_ratios %>%
   theme(axis.text = element_text(size = 10), 
         axis.title = element_text(size = 12))
 
-# Save Figure S4
-
-ggsave("Figures/Mass_Ratios.png", p_emp_ratios, width = 3000, height = 2000, unit = "px")
+# ggsave("Figures/Mass_Ratios.png", p_emp_ratios, width = 3000, height = 2000, unit = "px")
 
 
 ########## Process Functional Traits ##########
@@ -164,7 +166,7 @@ names(trait_categories) = trait_meta$category
 # Set 2-IUCN: IUCN base traits + pelagic, nocturnal
 # Set 3-IUCN: IUCN base traits
 
-if (grepl("1", trait_set)) {combination = c(base_traits, "migration", "pelagic", "nocturnal", "parasite", "nest")}
+if (grepl("1", trait_set)) {combination = c(base_traits, "migration", "pelagic", "nocturnal", "parasite", "nest_traits")}
 if (grepl("2", trait_set)) {combination = c(base_traits, "pelagic", "nocturnal")}
 if (grepl("3", trait_set)) {combination = base_traits}
 
@@ -203,7 +205,7 @@ similarities_cosine = calculate_similarity(interactions = filtered_interactions,
                                            cont_traits = cont_tr, 
                                            disc_traits = disc_tr, 
                                            perc_traits = perc_tr, 
-                                           top_n = 10, threshold = 0.95)
+                                           top_n = 10, threshold = threshold)
 
 if (trait_matching) {
   
@@ -218,7 +220,8 @@ if (trait_matching) {
   rename(Predicted_Resource_Mass = Mass, Predicted_Resource_Habitat_Density = Habitat.Density) %>% 
   mutate(log_Mass_Ratio = log(Predicted_Resource_Mass / Resource_Mass))
 
-# Filter by log mass ratio
+# Filter by log mass ratio: log(resource / predicted resource) < 10%
+# or log(resource / predicted resource) > 50%
 # Harder constraint on the upper limit of prey mass than the lower limit 
 # And habitat density: resource and predicted resource must has the same density
 # These are extremely conservative filters

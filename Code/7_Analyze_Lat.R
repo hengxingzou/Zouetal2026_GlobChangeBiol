@@ -12,7 +12,7 @@ registerDoSNOW(cl)
 
 # Read map
 
-latlong_shp = read_sf("Data/Maps/BBS_LatLong_strata.shp")
+latlong_shp = read_sf("../Databases/NABBS/Grids/BBS_LatLong_strata.shp")
 
 # Read interaction potentials
 
@@ -36,7 +36,7 @@ all_unique_pairs = Interaction_Pairs %>%
 
 # Calculation
 
-All_Communities = read_csv("Data/Relative_Abundance.csv") %>% 
+All_Communities = read_csv("../FunctionalDiversity/Data/Relative_Abundance.csv") %>% 
   filter(year >= 1970, lat <= 55, long >= -135) %>% 
   filter(latin %in% c(all_unique_pairs$Predator, all_unique_pairs$Prey))
 
@@ -80,7 +80,7 @@ predator_shifts = species_shifts_adj %>%
   mutate(level = "full_range", 
          sign = if_else(estimate > 0, "pos", "neg"))
 
-# Save stats; this is Table S2
+# Save stats
 
 write_csv(predator_shifts, "Data/Pred_Lat_Shifts.csv")
 
@@ -109,7 +109,7 @@ predator_shifts %>%
   pull(sign) %>% 
   table()
 
-# Save figure; this is an intermediate figure not in the manuscript
+# Save figure
 
 ggsave("Figures/Predator_Lat_Shift.png", p_pred_shift, width = 2000, height = 2000, unit = "px")
 
@@ -144,7 +144,7 @@ prey_shifts %>%
   pull(sign) %>% 
   table()
 
-# Save figure; this is an intermediate figure not in the manuscript
+# Save figure
 
 ggsave("Figures/Prey_Lat_Shift.png", p_prey_shift, width = 2000, height = 5000, unit = "px")
 
@@ -233,8 +233,8 @@ p_IP_shift_bypred = ggplot() +
                       alpha = signif), 
                   color = "black", size = 0.5, linewidth = 1) + 
   geom_hline(yintercept = 0) + 
-  ylab("Temporal trend of latitudinal centroid") + 
-  scale_color_manual(values = c("blue", "red"))
+  ylab("Temporal trend of latitudinal centroid (degree per year)") + 
+  scale_color_manual(values = c("#714DF6", "#EB5237")) + 
   coord_flip() + 
   theme_bw() + 
   theme(axis.text.x = element_text(size = 10), 
@@ -244,9 +244,41 @@ p_IP_shift_bypred = ggplot() +
 
 p_IP_shift_bypred
 
-# Save figure; this is Figure 4
+# Save figure
 
 ggsave("Figures/IP_Lat_Shift_byPred.png", p_IP_shift_bypred, width = 2000, height = 2000, unit = "px")
+ggsave("Figures/IP_Lat_Shift_byPred.pdf", p_IP_shift_bypred, width = 2000, height = 2000, unit = "px")
+
+# Preys, whole-range and ranges of interactions
+
+coeff_prey = coeff_all_pairs %>% 
+  filter(group == "prey") %>% 
+  select(term, estimate, std.error, statistic, p.adjusted, Prey, signif, sign) %>% 
+  mutate(level = "pairwise_overlap")
+
+p_IP_shift_byprey = ggplot() + 
+  geom_point(data = coeff_prey, 
+             aes(x = Prey, y = estimate, alpha = signif, color = sign), 
+             position = position_jitter(0.15)) + 
+  geom_pointrange(data = prey_shifts, 
+                  aes(x = reorder(Prey, -estimate), y = estimate, 
+                      ymin = estimate - std.error, ymax = estimate + std.error, 
+                      alpha = signif), 
+                  color = "black", size = 0.5, linewidth = 1) + 
+  geom_hline(yintercept = 0) + 
+  ylab("Temporal trend of latitudinal centroid") + 
+  coord_flip() +
+  theme_bw() + 
+  theme(axis.text.x = element_text(size = 10), 
+        axis.text.y = element_text(size = 10), 
+        axis.title = element_text(size = 12), 
+        legend.position = "none")
+
+p_IP_shift_byprey
+
+# Save figure
+
+ggsave("Figures/IP_Lat_Shift_byPrey.png", p_IP_shift_byprey, width = 2000, height = 5000, unit = "px")
 
 
 ########## Decomposition of Contributions to Latitudinal Shifts ##########
@@ -286,8 +318,8 @@ for (i in 1:length(all_pred)) {
     geom_vline(xintercept = p_shift - p_se, color = "red", linetype = 2) +
     geom_vline(xintercept = p_shift + p_se, color = "red", linetype = 2) +
     scale_color_gradient2(low = "blue", mid = "gray90", high = "red", midpoint = 0) + 
-    xlab("Predator latitudinal shifts") + 
-    ylab("Prey latitudinal shifts") +
+    xlab("Predator latitudinal shifts (degree per year)") + 
+    ylab("Prey latitudinal shifts (degree per year)") +
     ggh4x::facet_wrap2(.~Predator, scales = "free") + 
     theme_bw() + 
     theme(axis.text = element_text(size = 10), 
@@ -306,6 +338,8 @@ for (i in 1:length(all_pred)) {
                y = yrange_p_single_main[2] - 0.1*(yrange_p_single_main[2] - yrange_p_single_main[1]), 
                label = "*", size = 20)
   }
+  
+  # In the following density plots, blue (second color) is documented interactions
   
   p_pred = single_pred %>% 
     ggplot(aes(x = pred_shift)) +
@@ -337,7 +371,7 @@ names(pl_all) = all_pred
 
 pl_all
 
-# Save multi-panel figure; this is Figure 5
+# Save multi-panel figure
 
 pl_combined = wrap_plots(pl_all, axis_titles = "collect")
 

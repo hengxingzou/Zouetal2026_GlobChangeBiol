@@ -18,7 +18,25 @@ All_Communities = All_Communities %>%
 
 # Read intrinsic interaction potential (IIP)
 
-IIP = read_csv("Data/IP_IIP/Intrinsic_IP_1-AVONET_0.95_TRUE.csv")
+IIP = read_csv("Data/IP_IIP/Intrinsic_IP_1-AVONET_0.5_TRUE.csv")
+
+# Sensitivity analysis: scale threshold of functional compatibility by species richness
+# The idea is that more species-rich communities allow for higher specialization of the prey and potentially higher thresholds
+# First, count the number of unique species in All_Communities for each region
+
+spp_num = All_Communities %>% 
+  group_by(region) %>% 
+  summarize(count = n_distinct(latin)) %>% pull(count)
+
+# Then, scale the threshold using an arbitrary factor k, centering the default threshold (0.95) at the mean species richness
+
+k = 0.00025
+threshold = 0.95
+mean_spp_num = mean(spp_num)
+
+# Finally, toggle scaling on or off before running the following code
+
+scaling = T
 
 # Calculate interaction potential (IP) for all species with abundance estimates
 
@@ -51,6 +69,18 @@ interact_pairs = foreach(g = grids, .combine = rbind, .packages = "tidyverse") %
       inner_join(IIP, by = c("Spp_1" = "Predator", "Spp_2" = "Prey")) %>% 
       rename(Predator = Spp_1, Prey = Spp_2) %>% 
       mutate(Recorded = if_else(IIP == 1, 1, 0))
+    
+    # Sensitivity analysis: scaling threshold of functional compatibility by species richness
+    # Then filter the species pairs based on this scaled new threshold
+    
+    if (scaling) {
+      
+      new_threshold = (length(all_spp) - mean_spp_num) * k + threshold
+      
+      pairs_subset = pairs_subset %>% 
+        filter(IIP >= new_threshold)
+      
+    }
     
     # Calculate the interaction potential as 
     # intrinsic interaction potential * species 1 relative abundance * species 2 relative abundance
@@ -91,6 +121,10 @@ interact_pairs = foreach(g = grids, .combine = rbind, .packages = "tidyverse") %
   
 }
 
-# Write data
+# Write data for the original analysis
 
 write_csv(interact_pairs, "Data/IP_IIP/adj_Pairs_IP_1-AVONET_0.95_TRUE.csv")
+
+# Write data for the sensitivity analysis
+
+# write_csv(interact_pairs, "Data/IP_IIP/sens_adj_Pairs_IP_1-AVONET_0.5_TRUE.csv")
